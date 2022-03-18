@@ -1,5 +1,6 @@
 #Requires -Version 5
 #Requires -Modules ActiveDirectory
+#Requires -RunAsAdministrator
 <#
     .SYNOPSIS
 	Report on permissions, showing files/folders with specific identity object types
@@ -91,6 +92,10 @@
     .NOTES
 	Scott Knights
 	V 1.20220316.1
+		Initial Release
+	V 1.20220318.1
+		Added #Requires -RunAsAdministrator
+		Fixed No access ACLs not being reported due to issue with groupscope
 
 	TODO:
 		Add a GUI front end?
@@ -350,17 +355,22 @@ Foreach ($path in $paths) {
 		}
 	}
 
+	[string]$groupscope=$null
+	if ($reportscope) {
+		$groupscope="NA"
+	}
+
 	# Path was too long to report on. Either the OS does not support long paths, or it isn't enabled.
 	if ($longpaths.count -gt 0) {
 		if ($longpaths.contains($path)) {
-			write-reportfile -pathname $path -pathtype $pathtype -identitytype "Path Too Long"
+			write-reportfile -pathname $path -pathtype $pathtype -identitytype "Path Too Long" -groupscope $groupscope
 			continue
 		}
 	}
 	# If reporting on no permission and the path is in the error paths variable, write its details to the report.
 	if ($noaccesspaths.count -gt 0 -and $nopermission) {
 		if ($noaccesspaths.contains($path)) {
-			write-reportfile -pathname $path -pathtype $pathtype -identity $curruser -permissions "NONE" -identitytype "NO PERMISSION"
+			write-reportfile -pathname $path -pathtype $pathtype -identity $curruser -permissions "NONE" -identitytype "NO PERMISSION" -groupscope $groupscope
 			continue
 		}
 	}
@@ -382,10 +392,6 @@ Foreach ($path in $paths) {
 
 
 		[string]$type=$null
-		[string]$groupscope=$null
-		if ($reportscope) {
-			$groupscope="NA"
-		}
 		[string]$identityname=$Access.IdentityReference
 
 		# Check if the identity name is included in the includes patterns
