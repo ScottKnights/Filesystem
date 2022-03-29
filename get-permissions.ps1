@@ -96,7 +96,8 @@
 	V 1.20220318.1
 		Added #Requires -RunAsAdministrator
 		Fixed No access ACLs not being reported due to issue with groupscope
-
+	V 1.20220322.1
+		Fixed issue with MSA/GMSA reporting
 	TODO:
 		Add a GUI front end?
     .EXAMPLE
@@ -252,7 +253,7 @@ if ($buildnumber -ge 14393) {
 	[boolean]$lpe=$false
 	if ((get-itemproperty -path $regkey).PSObject.Properties.Name -contains $regval) {
 		if ((get-itemproperty -path $regkey -name $regval).$regval -eq 1) {
-			[boolean]$lpe=$true
+			$lpe=$true
 		}
 	}
 	if ($lpe) {
@@ -437,11 +438,11 @@ Foreach ($path in $paths) {
 					$type="Domain Computer"
 				}
 			} elseif ($acctype -eq "msDS-GroupManagedServiceAccount") {
-				if ($domaincomputer) {
+				if ($domaingmsa) {
 					$type="Domain GMSA"
 				}
 			} elseif ($acctype -eq "msDS-ManagedServiceAccount") {
-				if ($domaincomputer) {
+				if ($domainmsa) {
 					$type="Domain MSA"
 				}
 			}
