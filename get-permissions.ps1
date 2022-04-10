@@ -1,6 +1,5 @@
 #Requires -Version 5
 #Requires -Modules ActiveDirectory
-#Requires -RunAsAdministrator
 <#
     .SYNOPSIS
 	Report on permissions, showing files/folders with specific identity object types
@@ -98,15 +97,21 @@
 		Fixed No access ACLs not being reported due to issue with groupscope
 	V 1.20220322.1
 		Fixed issue with MSA/GMSA reporting
+	V 1.20220404.1
+		Added some extra error trapping and removed #Requires -RunAsAdministrator
+		Fix comment typos
+		Use literalpath with get-acl
+		Move variable declarations to top of script
+		Change error path arrays to arraylists
 	TODO:
 		Add a GUI front end?
     .EXAMPLE
 	get-permissions -rootpath "d:\data"
-	Report all identity types and all indentities for d:\data and subfolders to default report file ".\FolderPermissions.csv"
+	Report all identity types and all identities for d:\data and subfolders to default report file ".\FolderPermissions.csv"
 
     .EXAMPLE
 	get-permissions -rootpath "d:\data" -reportfile ".\myreport.csv" -overwritereportfile -files -reportscope
-	Report all identity types and all indentities for d:\data, subfolders and files to report file ".\myreport.csv"
+	Report all identity types and all identities for d:\data, subfolders and files to report file ".\myreport.csv"
 	Overwrite the report file if it already exists.
 	Report group scope for domain groups
 
@@ -220,9 +225,67 @@ function write-reportfile {
 	if ($groupscope) {
 		$properties.'Group Scope'=$groupscope
 	}
-	New-Object -TypeName PSObject -Property $Properties|Export-Csv -path $reportfile -NoTypeInformation -append
+	try {
+		New-Object -TypeName PSObject -Property $Properties|Export-Csv -path $reportfile -NoTypeInformation -append
+	} catch {
+		write-output "Unable to write to the report file."
+	}
 }
 #endregion Functions
+
+# ============================================================================
+#region Variables
+# ============================================================================
+
+# Declare and strongly type all variables
+
+# Get domain, computer and current user names from system variables
+[string]$domain=$env:userdomain
+[string]$computer=$env:computername
+[string]$curruser="$domain\$env:username"
+
+# Long path enabled check
+[int32]$buildnumber=$null
+[string]$regkey=$null
+[string]$regval=$null
+[boolean]$lpe=$false
+
+# Progress bar
+[nullable[double]]$secondsRemaining = $null
+[int32]$counter=0
+[nullable[DateTime]]$start=$null
+[nullable[TimeSpan]]$secondsElapsed=$null
+[int32]$percentComplete=0
+[Hashtable]$progressParameters=$null
+
+# Path arrays
+[array]$paths=@()
+[array]$subpaths=@()
+
+# Error path arraylists
+$longpaths=New-Object -TypeName 'System.Collections.ArrayList'
+$noaccesspaths=New-Object -TypeName 'System.Collections.ArrayList'
+$errpaths=New-Object -TypeName 'System.Collections.ArrayList'
+
+# Main loop
+[int32]$numobj=$null
+[string]$pathtype=$null
+[string]$groupscope=$null
+[System.Security.AccessControl.FileSystemSecurity]$Acl=$null
+[string]$identitytype=$null
+[string]$identityname=$null
+[boolean]$includes=$false
+[string]$sam=$null
+[string]$acctype=$null
+[string]$localname=$null
+[string]$localcomp=$null
+[string]$localname=$null
+[string]$replacestring=$null
+[string[]]$users=@()
+[string[]]$groups=@()
+
+#endregion Variables
+
 
 # ============================================================================
 #region Execute
@@ -236,21 +299,26 @@ if (-not (test-path -literalpath $rootfolder)) {
 }
 
 # Check if the report file already exists. Delete it if $overwritereportfile is selected.
-if (test-path $reportfile) {
+if (test-path -literalpath $reportfile) {
 	if ($overwritereportfile) {
-		remove-item -literalpath $reportfile -force
+		try {
+			remove-item -literalpath $reportfile -force -erroraction stop
+		} catch {
+			write-output "Unable to delete existing report file. Exiting."
+			return
+		}
 	} else {
-		"The report file $reportfile already exists. Move or rename. Exiting."
+		write-output "The report file $reportfile already exists. Move or rename. Exiting."
 		return
 	}
 }
 
 # Check if windows version supports long file paths and if it is enabled. Supported in Server 2019 and Windows 10 1607 or later.
-[int]$buildnumber=(Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name CurrentBuildnumber).currentbuildnumber
+$buildnumber=(Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name CurrentBuildnumber).currentbuildnumber
 if ($buildnumber -ge 14393) {
-	[string]$regkey="HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem"
-	[string]$regval="LongPathsEnabled"
-	[boolean]$lpe=$false
+	$regkey="HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem"
+	$regval="LongPathsEnabled"
+	$lpe=$false
 	if ((get-itemproperty -path $regkey).PSObject.Properties.Name -contains $regval) {
 		if ((get-itemproperty -path $regkey -name $regval).$regval -eq 1) {
 			$lpe=$true
@@ -266,32 +334,22 @@ if ($buildnumber -ge 14393) {
 	write-output "Your OS does not support long file paths (>260 characters)."
 }
 
-# Get domain, computer and current user names from system variables
-[string]$domain=$env:userdomain
-[string]$computer=$env:computername
-[string]$curruser="$domain\$env:username"
-
 # If no identity types are specified, report on them all
 if (($nopermission,$everyone,$sid,$creatorowner,$ntauthority,$localuser,$localgroup,$domainuser,$domaingroup,$domaincomputer,$domaingmsa,$domainmsa,$builtingroup,$builtinuser -eq $false).Count -eq 14) {
 	$nopermission=$everyone=$sid=$creatorowner=$ntauthority=$localuser=$localgroup=$domainuser=$domaingroup=$domaincomputer=$domaingmsa=$domainmsa=$builtingroup=$builtinuser=$true
 }
 
 # Init progress bar
-[nullable[double]]$secondsRemaining = $null
-[int32]$counter=0
-[DateTime]$start=get-date
-[TimeSpan]$secondsElapsed = (Get-Date) - $start
-
-[int32]$percentComplete=0
-[Hashtable]$progressParameters = @{
+$start=get-date
+$secondsElapsed=(Get-Date)-$start
+$progressParameters = @{
        	Activity = "Enumerating paths."
         Status = "Please wait..."
         CurrentOperation = ""
 }
 Write-Progress @progressParameters
 
-[array]$paths=$rootfolder
-[array]$subpaths=@()
+$paths=$rootfolder
 # Get subfolders and files (if files is selected)
 if ($files) {
 	$subpaths=(get-childitem -literalPath $rootfolder -Recurse -Force -ErrorVariable Err -ErrorAction SilentlyContinue).fullname
@@ -300,18 +358,15 @@ if ($files) {
 }
 
 # If there are any errors, create variables containing the error paths. Currently assumes all are access is denied or path too long.
-[string[]]$longpaths=@()
-[string[]]$noaccesspaths=@()
-[string[]]$errpaths=@()
 if ($err.count -gt 0) {
 	foreach ($e in $err) {
 		if ($e.exception -like "*Could not find a part of the path *") {
-			$longpaths+=$e.targetobject
+			$null=($longpaths.add($e.targetobject))
 		} elseif ($e.exception -like "*Access to the path *") {
-			$noaccesspaths+=$e.targetobject
+			$null=($noaccesspaths.add($e.targetobject))
 		} else {
 			# Anything that isn't long path or access denied
-			$errpaths+=$e.targetobject
+			$null=($errpaths.add($e.targetobject))
 		}
 	}
 	# Dump errorvariable and path variables to text files if extra logging is enabled
@@ -327,7 +382,7 @@ if ($err.count -gt 0) {
 if ($subpaths.count -gt 0) {
 	$paths+=$subpaths
 }
-[int32]$numobj=$paths.count
+$numobj=$paths.count
 
 # Process each path and get its permissions
 Foreach ($path in $paths) {
@@ -348,15 +403,15 @@ Foreach ($path in $paths) {
 	}
 	Write-Progress @progressParameters
 
-	# If files specified test if path is a file. If not, then assume it is a folder.
-	[string]$pathtype="Folder"
+	# If the files switch is specified test if the path is a file. If not, then assume it is a folder.
+	$pathtype="Folder"
 	if ($files) {
 		if ((get-item -literalpath $path -force) -is [System.IO.FileInfo]) {
 			$pathtype="File"
 		}
 	}
 
-	[string]$groupscope=$null
+	$groupscope=$null
 	if ($reportscope) {
 		$groupscope="NA"
 	}
@@ -376,12 +431,19 @@ Foreach ($path in $paths) {
 		}
 	}
 
-	# Get the ACL. Hmmm. doesn't work with paths with square brackets.
-	#[System.Security.AccessControl.FileSystemSecurity]$Acl = Get-Acl -Path $path
-	# Alternate method of getting ACL that resolves square bracket problem
-	[System.Security.AccessControl.FileSystemSecurity]$acl=(Get-Item -force -literalpath $path).GetAccessControl()
+	# Get the ACL.
+	try {
+		$Acl=Get-Acl -literalpath $path -erroraction stop
+	} catch {
+		# Test if the path is still valid. If not, it usually means it has been changed/moved/deleted since enumeration so skip it
+		if (test-path -literalpath -and $nopermission) {
+			# Path still valid but cannot access it, so log it as NO PERMISSION if reporting on this
+			write-reportfile -pathname $path -pathtype $pathtype -identity $curruser -permissions "NONE" -identitytype "NO PERMISSION" -groupscope $groupscope
+		}
+		continue
+	}
 
-	# For each identity with permission, identify the identity type, check if the identity type is selected for reporting and set the $type variable
+	# For each identity with permission, identify the identity type, check if the identity type is selected for reporting and set the $identitytype variable
 	foreach ($Access in $acl.Access) {
 		# Skip ACL if it is Allow and denyonly is selected
 		if ($Access.AccessControlType -eq "Allow" -and $denyonly) {
@@ -392,11 +454,11 @@ Foreach ($path in $paths) {
 		}
 
 
-		[string]$type=$null
-		[string]$identityname=$Access.IdentityReference
+		$identitytype=$null
+		$identityname=$Access.IdentityReference
 
 		# Check if the identity name is included in the includes patterns
-		[boolean]$includes=$false
+		$includes=$false
 		foreach ($includepattern in $includepatterns) {
 			if ($identityname -like $includepattern) {
 				$Includes=$true
@@ -417,17 +479,22 @@ Foreach ($path in $paths) {
 			continue
 		}
 
+		$groupscope=$null
+		if ($reportscope) {
+			$groupscope="NA"
+		}
+
 		# Get identity if domain user/group/machine/MSA/GMSA
 		if ($identityname -like "$domain*") {
-			[string]$sam=$identityname.replace("$domain\","")
-			[string]$acctype=(Get-ADObject -Filter {(SamAccountName -eq $sam)}).objectclass
+			$sam=$identityname.replace("$domain\","")
+			$acctype=(Get-ADObject -Filter {(SamAccountName -eq $sam)}).objectclass
 			if ($acctype -eq "user") {
 				if ($domainuser) {
-					$type="Domain User"
+					$identitytype="Domain User"
 				}
 			} elseif ($acctype -eq "group") {
 				if ($domaingroup) {
-					$type="Domain Group"
+					$identitytype="Domain Group"
 					# Get group scope if reportscope switch is true
 					if ($reportscope) {
 						$groupscope=(get-adgroup $sam).groupscope
@@ -435,100 +502,100 @@ Foreach ($path in $paths) {
 				}
 			} elseif ($acctype -eq "computer") {
 				if ($domaincomputer) {
-					$type="Domain Computer"
+					$identitytype="Domain Computer"
 				}
 			} elseif ($acctype -eq "msDS-GroupManagedServiceAccount") {
 				if ($domaingmsa) {
-					$type="Domain GMSA"
+					$identitytype="Domain GMSA"
 				}
 			} elseif ($acctype -eq "msDS-ManagedServiceAccount") {
 				if ($domainmsa) {
-					$type="Domain MSA"
+					$identitytype="Domain MSA"
 				}
 			}
 		# Get identity if it is a BUILTIN user/group
 		} elseif ($identityname -like "BUILTIN*") {
-			[string]$localname=$identityname.replace("BUILTIN\","")
+			$localname=$identityname.replace("BUILTIN\","")
 			if (get-localuser $localname -ErrorAction SilentlyContinue) {
 				if ($builtinuser) {
-					$type="BUILTIN User"
+					$identitytype="BUILTIN User"
 				}
 			} else {
 				if ($builtingroup) {
-					$type="BUILTIN Group"
+					$identitytype="BUILTIN Group"
 				}
 			}
 		# Check if identity if a local user/group on the machine the script is running on
 		} elseif ($identityname -like "$computer*") {
-			[string]$localname=$identityname.replace("$computer\","")
+			$localname=$identityname.replace("$computer\","")
 			if (get-localuser $localname -ErrorAction SilentlyContinue) {
 				if ($localuser) {
-					$type="Local User"
+					$identitytype="Local User"
 				}
 			} else {
 				if ($localgroup) {
-					$type="Local Group"
+					$identitytype="Local Group"
 				}
 			}
 		# Check if identity is CREATOR OWNER
 		} elseif ($identityname -eq "CREATOR OWNER") {
 			if ($creatorowner) {
-				$type="CREATOR OWNER"
+				$identitytype="CREATOR OWNER"
 			}
 		# Check if identity is an NT AUTHORITY account
 		} elseif ($identityname -like "NT AUTHORITY*") {
 			if ($ntauthority) {
-				$type="NT AUTHORITY"
+				$identitytype="NT AUTHORITY"
 			}
 		# Check if identity is a local user/group on a different machine - Slow and may fail
 		} elseif ($identityname -like "*\*") {
-			[string]$localcomp=$identityname.split("\")[0]
-			[string]$localname=$identityname.split("\")[1]
-			[string]$rstring=("WinNT://$domain/$localcomp/").tolower()
-			[ADSI]$compname = "WinNT://$localcomp"
+			$localcomp=$identityname.split("\")[0]
+			$localname=$identityname.split("\")[1]
+			$replacestring=("WinNT://$domain/$localcomp/").tolower()
+			$compname=[ADSI]"WinNT://$localcomp"
 			# Try get the list of local users from the remote machine
 			$ErrorActionPreference = "SilentlyContinue"
-			[string[]]$users=@()
+			$users=@()
 			$users = ($compname.psbase.children | where-object {$_.SchemaClassName -match "user"}).path.tolower().replace($rstring,"")
 			$ErrorActionPreference = "Continue"
 			if ($users.contains($localname.tolower())) {
 				if ($localuser) {
-					$type="Local User"
+					$identitytype="Local User"
 				}
 			} else {
 				# Try get the list of local groups from the remote machine
 				$ErrorActionPreference = "SilentlyContinue"
-				[string[]]$groups=@()
+				$groups=@()
 				$groups = ($compname.psbase.children | where-object {$_.SchemaClassName -match "group"}).path.tolower().replace($rstring,"")
 				$ErrorActionPreference = "Continue"
 				if ($groups.contains($localname.tolower())) {
 					if ($localgroup) {
-						$type="Local Group"
+						$identitytype="Local Group"
 					}
 				} else {
 				# Unable to ascertain whether the identity is a group or user
 					if ($localuser -or $localgroup) {
-						$type="Local User/Group"
+						$identitytype="Local User/Group"
 					}
 				}
 			}
 		# Check if the identity is an unresolvable SID
 		} elseif ($identityname -like "S-*") {
 			if ($sid) {
-				$type="Unresolvable SID"
+				$identitytype="Unresolvable SID"
 			}
 		# Check if the identity is Everyone
 		} elseif ($identityname -eq "everyone") {
 			if ($everyone) {
-				$type="Everyone"
+				$identitytype="Everyone"
 			}
 		# Give up, no idea what the identity type is. Always report on this.
 		} else {
-			$type="Unknown"
+			$identitytype="Unknown"
 		}
 		# Type will only have a value if the identity type was identified and is being reported on, or is unknown. If it has a value, write its details to the report
-		if ($type) {
-			write-reportfile -pathname $path -pathtype $pathtype -owner $acl.owner -identity $Access.IdentityReference -permissions $Access.FileSystemRights -inherited $Access.IsInherited -accesstype $Access.AccessControlType -identitytype $type -groupscope $groupscope
+		if ($identitytype) {
+			write-reportfile -pathname $path -pathtype $pathtype -owner $acl.owner -identity $Access.IdentityReference -permissions $Access.FileSystemRights -inherited $Access.IsInherited -accesstype $Access.AccessControlType -identitytype $identitytype -groupscope $groupscope
 		}
 	}
 }
