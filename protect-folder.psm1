@@ -163,7 +163,7 @@ function protect-folder {
 	)
 
 	# Maximum group name length
-	$maxlength=64
+	[int]$maxlength=64
 
 	# Get the list of paths from a file
 	if ($pathfile) {
@@ -196,7 +196,7 @@ function protect-folder {
 		# Strip the path prefix
 		$shortpath=$path.Substring($pathprefix.length)
 
-		# Prepend the group prefix to set the write group name and replace \ with !
+		# Prepend the group prefix to set the modify group name and replace \ with !
 		$mgroup=$groupprefix+$shortpath.replace("\","!")+"-M"
 
 		# Replace any illegal characters in group name
@@ -267,7 +267,7 @@ function protect-folder {
 		try {
 			$msid=(get-adgroup $mgroup).sid.value
 			$rsid=(get-adgroup $rgroup).sid.value
-			$acl = Get-Acl $path
+			$acl = Get-Acl -LiteralPath $path
 			if ($traverse) {
 				$tsid=(get-adgroup $tgroup).sid.value
 				$sddl="O:BAG:DUD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICIIO;0x1301bf;;;$msid)(A;;0x1201bf;;;$msid)(A;OICI;0x1200a9;;;$rsid)(A;;0x1200a9;;;$tsid)"
@@ -275,7 +275,7 @@ function protect-folder {
 				$sddl="O:BAG:DUD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICIIO;0x1301bf;;;$msid)(A;;0x1201bf;;;$msid)(A;OICI;0x1200a9;;;$rsid)"
 			}
 			$acl.SetSecurityDescriptorSddlForm($sddl)
-			Set-Acl -Path $path -AclObject $acl
+			Set-Acl -LiteralPath $path -AclObject $acl
 		} catch {
 			write-output "Failed to set permissions on $path"
 		}
