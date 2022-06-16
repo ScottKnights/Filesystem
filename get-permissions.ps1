@@ -6,6 +6,8 @@
     .DESCRIPTION
 	Create a CSV file of permissions on each path inside the selected root path.
 		Import into Excel and filter to see how good/bad your permissions are!
+	Depth parameter allows you to select how deep to analyse the folder structure. Depth of 0 will only report on the top level.
+	Depth defaults to 9999. Hopefully, nobody has a deeper file structure than this!
 	Can select patterns of identities to include or exclude from the report.
 		Default is include everything (Include pattern is "*", no excludepatterns).
 	Report permissions for the selected object types by specifying the required switches.
@@ -83,6 +85,9 @@
 	Switch. Report scope of domain groups. Report may take a bit longer to run as it queries AD for each domain group.
     .PARAMETER logerrors
 	Switch. Writes some error logging for development troubleshooting.
+    .PARAMETER depth
+	Integer. Controls how deep to analyse the folder structure. Default 9999.
+
 
     .INPUTS
 
@@ -103,7 +108,12 @@
 		Use literalpath with get-acl
 		Move variable declarations to top of script
 		Change error path arrays to arraylists
+	V 1.20220616.1
+		Added depth parameter instead of using recurse
 	TODO:
+		Change analysis to recurse one folder at at time instead of getting all files/folders into an array at the start of the run?
+			Pros: No wait for array to build, don't have to hold potentially huge array in memory
+			Cons: No progress bar as won't know how many file/folders to process
 		Add a GUI front end?
     .EXAMPLE
 	get-permissions -rootpath "d:\data"
@@ -123,6 +133,10 @@
     .EXAMPLE
 	get-permissions -rootpath "d:\data" -domaingroup -includepatterns "*FL-*" -allowonly
 	Report allow permissions for domain groups with "FL-" in their name for d:\data and subfolders
+
+    .EXAMPLE
+	get-permissions -rootpath "d:\home" -sid -depth 0
+	Report unresolved SIDs for only the top level of folders in D:\home.
 #>
 
 # ============================================================================
@@ -199,8 +213,10 @@ Param(
     [switch]$denyonly,
 
     [Parameter()]
-    [switch]$reportscope
+    [switch]$reportscope,
 
+    [Parameter()]
+    [int]$depth=9999
 )
 #endregion Parameters
 
@@ -352,9 +368,9 @@ Write-Progress @progressParameters
 $paths=$rootfolder
 # Get subfolders and files (if files is selected)
 if ($files) {
-	$subpaths=(get-childitem -literalPath $rootfolder -Recurse -Force -ErrorVariable Err -ErrorAction SilentlyContinue).fullname
+	$subpaths=(get-childitem -literalPath $rootfolder -depth $depth -Force -ErrorVariable Err -ErrorAction SilentlyContinue).fullname
 } else {
-	$subpaths=(get-childitem -Directory -literalPath $rootfolder -Recurse -Force -ErrorVariable Err -ErrorAction SilentlyContinue ).fullname
+	$subpaths=(get-childitem -Directory -literalPath $rootfolder -depth $depth -Force -ErrorVariable Err -ErrorAction SilentlyContinue ).fullname
 }
 
 # If there are any errors, create variables containing the error paths. Currently assumes all are access is denied or path too long.
