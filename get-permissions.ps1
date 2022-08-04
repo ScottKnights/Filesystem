@@ -110,32 +110,34 @@
 		Change error path arrays to arraylists
 	V 1.20220616.1
 		Added depth parameter instead of using recurse
+	V 1.20220804.1
+		Fixed rootfolder parameter in examples
 	TODO:
 		Change analysis to recurse one folder at at time instead of getting all files/folders into an array at the start of the run?
 			Pros: No wait for array to build, don't have to hold potentially huge array in memory
 			Cons: No progress bar as won't know how many file/folders to process
 		Add a GUI front end?
     .EXAMPLE
-	get-permissions -rootpath "d:\data"
+	get-permissions -rootfolder "d:\data"
 	Report all identity types and all identities for d:\data and subfolders to default report file ".\FolderPermissions.csv"
 
     .EXAMPLE
-	get-permissions -rootpath "d:\data" -reportfile ".\myreport.csv" -overwritereportfile -files -reportscope
+	get-permissions -rootfolder "d:\data" -reportfile ".\myreport.csv" -overwritereportfile -files -reportscope
 	Report all identity types and all identities for d:\data, subfolders and files to report file ".\myreport.csv"
 	Overwrite the report file if it already exists.
 	Report group scope for domain groups
 
     .EXAMPLE
-	get-permissions -rootpath "d:\data" -domainuser -sid -denyonly -excludepatterns "*sam*","*max*"
+	get-permissions -rootfolder "d:\data" -domainuser -sid -denyonly -excludepatterns "*sam*","*max*"
 	Report deny permissions for identity types domain users and unresolved SIDs for d:\data and subfolders
 	Dont report on any identities containing "sam" or "max" in their samaccountnames.
 
     .EXAMPLE
-	get-permissions -rootpath "d:\data" -domaingroup -includepatterns "*FL-*" -allowonly
+	get-permissions -rootfolder "d:\data" -domaingroup -includepatterns "*FL-*" -allowonly
 	Report allow permissions for domain groups with "FL-" in their name for d:\data and subfolders
 
     .EXAMPLE
-	get-permissions -rootpath "d:\home" -sid -depth 0
+	get-permissions -rootfolder "d:\home" -sid -depth 0
 	Report unresolved SIDs for only the top level of folders in D:\home.
 #>
 
