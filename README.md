@@ -1,6 +1,6 @@
 Anything Filesystem related  
   
-get-permissions.ps1  
+Get-Permissions.ps1  
 Report on permissions, showing files/folders with specific identity object types.  
 Create a CSV file of permissions on each path inside the selected root path.  
 Lots of options for reporting on specific identity types or identities that match/don't match patterns.  
